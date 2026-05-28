@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude 聊天记录查看器</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #f5f3ef;
+  --bg-panel: #fffdf9;
+  --bg-card: #f0ece5;
+  --bg-hover: #e8e4dc;
+  --bg-thinking: #faf8f4;
+  --border: #ddd8ce;
+  --text: #2c2a25;
+  --text-dim: #6b6860;
+  --text-muted: #9e998f;
+  --accent: #8b7355;
+  --accent-dim: #a6956e;
+  --human: #b47d4a;
+  --assistant: #5a7a6b;
+  --tool: #5a8a6a;
+  --thinking-color: #7a6b8a;
+  --flag-color: #c06050;
+}
+
+html, body {
+  height: 100%;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* === Upload === */
+#upload-screen {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; height: 100%; gap: 24px; padding: 24px;
+}
+#upload-screen h1 { font-size: 20px; font-weight: 300; letter-spacing: 4px; color: var(--accent); }
+#upload-screen p { color: var(--text-dim); font-size: 13px; max-width: 360px; text-align: center; line-height: 1.8; }
+
+.upload-zone {
+  width: 280px; height: 160px; border: 1.5px dashed var(--border);
+  border-radius: 16px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 12px;
+  cursor: pointer; background: var(--bg-panel); transition: all 0.2s;
+}
+.upload-zone:hover, .upload-zone.dragover { border-color: var(--accent); background: var(--bg-card); }
+.upload-zone svg { fill: none; stroke: var(--text-muted); stroke-width: 1.5; transition: stroke 0.2s; }
+.upload-zone:hover svg, .upload-zone.dragover svg { stroke: var(--accent); }
+.upload-zone span { color: var(--text-dim); font-size: 13px; }
+#file-input { display: none; }
+
+/* === Main === */
+#main-screen { display: none; height: 100%; flex-direction: column; }
+
+/* Topbar */
+.topbar {
+  height: 48px; background: var(--bg-panel); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; padding: 0 12px; gap: 8px; flex-shrink: 0;
+}
+.hamburger {
+  background: none; border: none; color: var(--text-dim);
+  cursor: pointer; padding: 4px; display: flex; flex-shrink: 0;
+}
+.topbar-title {
+  font-size: 13px; color: var(--text-dim); flex: 1;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+
+.name-wrap { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.name-wrap label { font-size: 11px; color: var(--text-muted); }
+.name-input {
+  width: 58px; background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--text); padding: 4px 6px; border-radius: 6px; font-size: 12px;
+  font-family: inherit; outline: none; transition: border-color 0.2s; text-align: center;
+}
+.name-input:focus { border-color: var(--accent-dim); }
+.name-sep { font-size: 12px; color: var(--border); }
+
+.topbar-btn {
+  background: var(--bg-card); border: 1px solid var(--border); color: var(--text-dim);
+  padding: 5px 10px; border-radius: 7px; font-size: 11px; cursor: pointer;
+  font-family: inherit; white-space: nowrap; flex-shrink: 0; transition: all 0.15s;
+}
+.topbar-btn:hover { background: var(--bg-hover); color: var(--text); }
+
+/* Content */
+.content-area { display: flex; flex: 1; overflow: hidden; position: relative; }
+
+.sidebar-overlay {
+  display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.15); z-index: 99;
+}
+.sidebar-overlay.show { display: block; }
+
+/* Sidebar — always a drawer */
+.sidebar {
+  position: absolute; left: -85%; top: 0;
+  width: 85%; max-width: 320px; height: 100%;
+  background: var(--bg-panel); border-right: 1px solid var(--border);
+  z-index: 100; transition: left 0.25s ease;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.sidebar.open { left: 0; }
+
+.sidebar-header { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.sidebar-header input {
+  width: 100%; background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--text); padding: 8px 12px; border-radius: 8px; font-size: 13px;
+  font-family: inherit; outline: none; transition: border-color 0.2s;
+}
+.sidebar-header input:focus { border-color: var(--accent-dim); }
+.sidebar-header input::placeholder { color: var(--text-muted); }
+
+.conv-list { flex: 1; overflow-y: auto; padding: 8px; }
+.conv-item {
+  padding: 10px 12px; border-radius: 10px; cursor: pointer;
+  margin-bottom: 2px; border: 1px solid transparent; transition: all 0.15s;
+}
+.conv-item:hover { background: var(--bg-hover); }
+.conv-item.active { background: var(--bg-card); border-color: var(--border); }
+.conv-item-name {
+  font-size: 13px; font-weight: 500; color: var(--text);
+  margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.conv-item-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 8px; }
+.sidebar-note { padding: 12px; font-size: 11px; color: var(--text-muted); text-align: center; }
+
+/* Messages */
+.messages-area { flex: 1; overflow-y: auto; padding: 20px 16px; min-width: 0; }
+.messages-wrapper { max-width: 720px; }
+.empty-state {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; color: var(--text-muted); font-size: 14px;
+}
+
+/* Message */
+.message { margin-bottom: 24px; }
+.msg-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.msg-sender { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; }
+.msg-sender.human { color: var(--human); }
+.msg-sender.assistant { color: var(--assistant); }
+.msg-time { font-size: 11px; color: var(--text-muted); font-family: monospace; }
+
+.msg-body { font-size: 14px; line-height: 1.8; color: var(--text); word-wrap: break-word; overflow-wrap: break-word; }
+.msg-body p { margin-bottom: 8px; }
+.msg-body p:last-child { margin-bottom: 0; }
+
+/* Thinking */
+.thinking-block {
+  margin: 8px 0; border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden; background: var(--bg-thinking);
+}
+.thinking-toggle {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  cursor: pointer; width: 100%; background: none; border: none;
+  color: var(--thinking-color); font-family: inherit; font-size: 12px; text-align: left;
+}
+.thinking-arrow { font-size: 10px; transition: transform 0.2s; flex-shrink: 0; }
+.thinking-block.open .thinking-arrow { transform: rotate(90deg); }
+.thinking-label { font-weight: 500; }
+.thinking-summary {
+  color: var(--text-muted); font-size: 12px; flex: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.thinking-content {
+  display: none; padding: 12px 14px; border-top: 1px solid var(--border);
+  font-size: 13px; line-height: 1.7; color: var(--text-dim);
+  max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word;
+}
+.thinking-block.open .thinking-content { display: block; }
+
+/* Tool */
+.tool-block {
+  margin: 8px 0; border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden; background: var(--bg-thinking);
+}
+.tool-header {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  cursor: pointer; width: 100%; background: none; border: none;
+  color: var(--tool); font-family: inherit; font-size: 12px; text-align: left;
+}
+.tool-icon { font-size: 14px; flex-shrink: 0; }
+.tool-name { font-family: monospace; font-size: 12px; }
+.tool-msg {
+  color: var(--text-muted); font-size: 12px; flex: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tool-arrow { font-size: 10px; transition: transform 0.2s; flex-shrink: 0; color: var(--text-muted); }
+.tool-block.open .tool-arrow { transform: rotate(90deg); }
+.tool-detail {
+  display: none; padding: 12px 14px; border-top: 1px solid var(--border);
+  font-size: 12px; line-height: 1.6; color: var(--text-dim);
+  max-height: 300px; overflow-y: auto; white-space: pre-wrap;
+  word-wrap: break-word; font-family: monospace;
+}
+.tool-block.open .tool-detail { display: block; }
+
+/* Flag */
+.flag-block {
+  margin: 8px 0; padding: 8px 14px; border-radius: 8px;
+  background: rgba(192,96,80,0.06); border: 1px solid rgba(192,96,80,0.15);
+  font-size: 12px; color: var(--flag-color);
+}
+
+/* File badge */
+.file-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  padding: 4px 10px; border-radius: 6px; font-size: 12px;
+  color: var(--text-dim); margin: 4px 4px 4px 0;
+}
+
+.msg-divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; opacity: 0.5; }
+
+/* Search */
+mark { background: rgba(139,115,85,0.2); color: var(--text); border-radius: 2px; padding: 0 2px; }
+.search-result-item {
+  padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
+  cursor: pointer; margin-bottom: 10px; background: var(--bg-panel);
+  transition: background 0.15s; max-width: 720px;
+}
+.search-result-item:hover { background: var(--bg-hover); }
+
+/* Toast */
+.export-toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--bg-panel); border: 1px solid var(--border);
+  padding: 10px 20px; border-radius: 10px; font-size: 13px; color: var(--text);
+  z-index: 999; display: none; box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+}
+.export-toast.show { display: block; }
+</style>
+</head>
+<body>
+
+<div id="upload-screen">
+  <h1>聊天记录查看器</h1>
+  <p>导出的 conversations.json 在这里查看<br>所有数据仅在本地处理，不会上传</p>
+  <div class="upload-zone" id="upload-zone">
+    <svg width="36" height="36" viewBox="0 0 24 24"><path d="M12 5v14M5 12l7-7 7 7"/></svg>
+    <span>点击或拖拽 JSON 文件</span>
+  </div>
+  <input type="file" id="file-input" accept=".json">
+</div>
+
+<div id="main-screen">
+  <div class="topbar">
+    <button class="hamburger" id="hamburger-btn">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+    </button>
+    <div class="topbar-title" id="topbar-title">选择一个对话</div>
+    <div class="name-wrap">
+      <label for="name-human">人</label>
+      <input type="text" id="name-human" class="name-input" value="冰冰" maxlength="12">
+      <span class="name-sep">/</span>
+      <label for="name-assistant">AI</label>
+      <input type="text" id="name-assistant" class="name-input" value="温瑾" maxlength="12">
+    </div>
+    <button class="topbar-btn" id="btn-export-current" style="display:none">导出当前</button>
+    <button class="topbar-btn" id="btn-export-all">导出全部</button>
+    <button class="topbar-btn" id="btn-reload">换文件</button>
+  </div>
+
+  <div class="content-area">
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <input type="text" id="search-input" placeholder="搜索对话…">
+      </div>
+      <div class="conv-list" id="conv-list"></div>
+    </div>
+    <div class="messages-area" id="messages-area">
+      <div class="empty-state">点击左上角 ☰ 选择对话</div>
+    </div>
+  </div>
+</div>
+
+<div class="export-toast" id="export-toast"></div>
+
+<script>
+let allConversations = [];
+let validConversations = [];
+let currentConvIndex = -1;
+
+function getHumanName()     { return document.getElementById('name-human').value.trim() || '冰冰'; }
+function getAssistantName() { return document.getElementById('name-assistant').value.trim() || '温瑾'; }
+function getSenderName(sender) { return sender === 'human' ? getHumanName() : getAssistantName(); }
+
+// === Upload ===
+const uploadZone = document.getElementById('upload-zone');
+const fileInput  = document.getElementById('file-input');
+
+uploadZone.addEventListener('click', () => fileInput.click());
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault(); uploadZone.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+
+function hasMeaningfulMessages(conv) {
+  const msgs = conv.chat_messages || [];
+  if (!msgs.length) return false;
+  return msgs.some(m => {
+    const contents = (m.content || []).filter(c => c.type !== 'token_budget');
+    return contents.some(c =>
+      (c.type === 'text' && c.text?.trim()) ||
+      (c.type === 'thinking' && c.thinking?.trim()) ||
+      c.type === 'tool_use' || c.type === 'tool_result'
+    );
+  });
+}
+
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      allConversations = Array.isArray(data) ? data : [data];
+      allConversations.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+      validConversations = allConversations.filter(c => !c.deleted_at && hasMeaningfulMessages(c));
+      showMain();
+    } catch (err) {
+      alert('JSON 解析失败: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function showMain() {
+  document.getElementById('upload-screen').style.display = 'none';
+  const ms = document.getElementById('main-screen');
+  ms.style.display = 'flex';
+  ms.style.flexDirection = 'column';
+  renderConvList();
+}
+
+document.getElementById('btn-reload').addEventListener('click', () => {
+  document.getElementById('upload-screen').style.display = 'flex';
+  document.getElementById('main-screen').style.display = 'none';
+  allConversations = []; validConversations = [];
+  currentConvIndex = -1; fileInput.value = '';
+  document.getElementById('search-input').value = '';
+});
+
+// === Sidebar toggle ===
+const sidebar = document.getElementById('sidebar');
+const overlay = document.getElementById('sidebar-overlay');
+document.getElementById('hamburger-btn').addEventListener('click', () => {
+  sidebar.classList.toggle('open');
+  overlay.classList.toggle('show');
+});
+overlay.addEventListener('click', () => {
+  sidebar.classList.remove('open');
+  overlay.classList.remove('show');
+});
+
+// === Name inputs — re-render on change ===
+function onNameChange() {
+  const kw = document.getElementById('search-input').value;
+  if (currentConvIndex >= 0) {
+    renderMessages(allConversations[currentConvIndex]);
+  } else if (kw) {
+    renderSearchResults(kw);
+  }
+}
+document.getElementById('name-human').addEventListener('input', onNameChange);
+document.getElementById('name-assistant').addEventListener('input', onNameChange);
+
+// === Search helpers ===
+function getMsgText(msg) {
+  return (msg.content || [])
+    .filter(c => c.type === 'text' && c.text)
+    .map(c => c.text)
+    .join('\n');
+}
+
+function convMatchesKeyword(conv, kw) {
+  const name = (conv.name || '').toLowerCase();
+  const date = (conv.created_at || '').slice(0, 10);
+  if (name.includes(kw) || date.includes(kw)) return true;
+  return (conv.chat_messages || []).some(m => getMsgText(m).toLowerCase().includes(kw));
+}
+
+function highlightText(text, keyword) {
+  if (!keyword) return esc(text);
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
+  return parts.map(p => p.toLowerCase() === keyword.toLowerCase() ? `<mark>${esc(p)}</mark>` : esc(p)).join('');
+}
+
+function searchAllMessages(keyword) {
+  const kw = keyword.toLowerCase();
+  const results = [];
+  validConversations.forEach(conv => {
+    const convIdx = allConversations.indexOf(conv);
+    const msgs = [...(conv.chat_messages || [])].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    msgs.forEach(msg => {
+      const text = getMsgText(msg);
+      if (!text.toLowerCase().includes(kw)) return;
+      const pos = text.toLowerCase().indexOf(kw);
+      const start = Math.max(0, pos - 60);
+      const end = Math.min(text.length, pos + keyword.length + 80);
+      const snippet = (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
+      results.push({ convIdx, conv, msg, snippet });
+    });
+  });
+  return results;
+}
+
+function renderSearchResults(keyword) {
+  const area = document.getElementById('messages-area');
+  area.innerHTML = '';
+  if (!keyword.trim()) {
+    area.innerHTML = '<div class="empty-state">点击左上角 ☰ 选择对话</div>';
+    return;
+  }
+  const results = searchAllMessages(keyword);
+  if (!results.length) {
+    area.innerHTML = `<div class="empty-state">没有找到包含「${esc(keyword)}」的消息</div>`;
+    return;
+  }
+  const header = document.createElement('div');
+  header.style.cssText = 'padding: 4px 0 20px; color: var(--text-muted); font-size: 13px; max-width: 720px;';
+  header.textContent = `找到 ${results.length} 条匹配消息`;
+  area.appendChild(header);
+
+  results.forEach(({ convIdx, conv, msg, snippet }) => {
+    const item = document.createElement('div');
+    item.className = 'search-result-item';
+    const senderClass = msg.sender === 'human' ? 'human' : 'assistant';
+    item.innerHTML = `
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span style="color:var(--accent-dim);font-weight:500">${esc(conv.name || '(无标题)')}</span>
+        <span class="msg-sender ${senderClass}" style="font-size:11px;letter-spacing:1px">${esc(getSenderName(msg.sender))}</span>
+        <span>${formatTime(msg.created_at)}</span>
+      </div>
+      <div style="font-size:13px;line-height:1.7;color:var(--text-dim)">${highlightText(snippet, keyword)}</div>
+    `;
+    item.addEventListener('click', () => {
+      document.getElementById('search-input').value = '';
+      selectConv(convIdx);
+    });
+    area.appendChild(item);
+  });
+}
+
+// === Conversation list ===
+function renderConvList(filter = '') {
+  const list = document.getElementById('conv-list');
+  list.innerHTML = '';
+  const kw = filter.toLowerCase();
+
+  validConversations.forEach(conv => {
+    const i = allConversations.indexOf(conv);
+    if (kw && !convMatchesKeyword(conv, kw)) return;
+
+    const el = document.createElement('div');
+    el.className = 'conv-item' + (i === currentConvIndex ? ' active' : '');
+    el.innerHTML = `
+      <div class="conv-item-name">${esc(conv.name || '(无标题)')}</div>
+      <div class="conv-item-meta">
+        <span>${(conv.created_at || '').slice(0, 10)}</span>
+        <span>${(conv.chat_messages || []).length} 条</span>
+      </div>
+    `;
+    el.addEventListener('click', () => selectConv(i));
+    list.appendChild(el);
+  });
+
+  const hiddenCount = allConversations.length - validConversations.length;
+  if (hiddenCount > 0) {
+    const note = document.createElement('div');
+    note.className = 'sidebar-note';
+    note.textContent = `已隐藏 ${hiddenCount} 个空/已删除对话`;
+    list.appendChild(note);
+  }
+}
+
+document.getElementById('search-input').addEventListener('input', e => {
+  const kw = e.target.value;
+  renderConvList(kw);
+  renderSearchResults(kw);
+  currentConvIndex = -1;
+  document.getElementById('topbar-title').textContent = kw ? `搜索：${kw}` : '选择一个对话';
+  document.getElementById('btn-export-current').style.display = 'none';
+});
+
+// === Select conversation ===
+function selectConv(index) {
+  currentConvIndex = index;
+  const conv = allConversations[index];
+  document.getElementById('topbar-title').textContent = conv.name || '(无标题)';
+  document.getElementById('btn-export-current').style.display = '';
+  renderConvList(document.getElementById('search-input').value);
+  renderMessages(conv);
+  sidebar.classList.remove('open');
+  overlay.classList.remove('show');
+}
+
+// === Render messages ===
+function renderMessages(conv) {
+  const area = document.getElementById('messages-area');
+  area.innerHTML = '';
+  const msgs = [...(conv.chat_messages || [])].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  if (!msgs.length) {
+    area.innerHTML = '<div class="empty-state">此对话没有消息</div>';
+    return;
+  }
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'messages-wrapper';
+  area.appendChild(wrapper);
+
+  let lastSender = null;
+  msgs.forEach(msg => {
+    const contents = (msg.content || []).filter(c => c.type !== 'token_budget');
+    const files = [...(msg.files || []), ...(msg.attachments || [])];
+    const meaningful = contents.filter(c =>
+      (c.type === 'text' && c.text?.trim()) ||
+      (c.type === 'thinking' && c.thinking?.trim()) ||
+      c.type === 'tool_use' || c.type === 'tool_result' || c.type === 'flag'
+    );
+    if (!meaningful.length && !files.length) return;
+
+    if (lastSender && lastSender !== msg.sender) {
+      const hr = document.createElement('hr');
+      hr.className = 'msg-divider';
+      wrapper.appendChild(hr);
+    }
+
+    const msgEl = document.createElement('div');
+    msgEl.className = 'message';
+
+    const header = document.createElement('div');
+    header.className = 'msg-header';
+    header.innerHTML = `
+      <span class="msg-sender ${msg.sender}">${esc(getSenderName(msg.sender))}</span>
+      <span class="msg-time">${formatTime(msg.created_at)}</span>
+    `;
+    msgEl.appendChild(header);
+
+    if (files.length) {
+      const filesDiv = document.createElement('div');
+      filesDiv.style.marginBottom = '8px';
+      files.forEach(f => {
+        const badge = document.createElement('span');
+        badge.className = 'file-badge';
+        badge.textContent = f.file_name || f.extracted_content?.slice(0, 30) || '附件';
+        filesDiv.appendChild(badge);
+      });
+      msgEl.appendChild(filesDiv);
+    }
+
+    meaningful.forEach(block => {
+      if (block.type === 'thinking') {
+        msgEl.appendChild(renderThinking(block));
+      } else if (block.type === 'tool_use') {
+        msgEl.appendChild(renderTool(block, '⚙', 'tool_use'));
+      } else if (block.type === 'tool_result') {
+        msgEl.appendChild(renderTool(block, '📋', 'tool_result'));
+      } else if (block.type === 'flag') {
+        const el = document.createElement('div');
+        el.className = 'flag-block';
+        el.textContent = '⚠ ' + (block.flag || 'flag');
+        msgEl.appendChild(el);
+      } else if (block.type === 'text' && block.text?.trim()) {
+        const body = document.createElement('div');
+        body.className = 'msg-body';
+        body.innerHTML = formatText(block.text);
+        msgEl.appendChild(body);
+      }
+    });
+
+    wrapper.appendChild(msgEl);
+    lastSender = msg.sender;
+  });
+
+  area.scrollTop = 0;
+}
+
+function renderThinking(block) {
+  const el = document.createElement('div');
+  el.className = 'thinking-block';
+  const summary = block.summaries?.[block.summaries.length - 1]?.summary || '思考中…';
+  el.innerHTML = `
+    <button class="thinking-toggle">
+      <span class="thinking-arrow">▶</span>
+      <span class="thinking-label">思考</span>
+      <span class="thinking-summary">${esc(summary)}</span>
+    </button>
+    <div class="thinking-content">${esc(block.thinking || '')}</div>
+  `;
+  el.querySelector('.thinking-toggle').addEventListener('click', () => el.classList.toggle('open'));
+  return el;
+}
+
+function renderTool(block, icon, type) {
+  const el = document.createElement('div');
+  el.className = 'tool-block';
+  const name = block.name || (type === 'tool_result' ? 'result' : 'unknown');
+  const msg = block.message || block.integration_name || '';
+  let detail = '';
+  if (type === 'tool_use') {
+    detail = block.input ? (typeof block.input === 'object' ? JSON.stringify(block.input, null, 2) : String(block.input)) : '';
+  } else {
+    if (block.content) {
+      detail = Array.isArray(block.content) ? block.content.map(c => c.text || '').join('\n') : String(block.content);
+    }
+  }
+  const displayDetail = detail.length > 3000 ? detail.slice(0, 3000) + '\n\n… (已截断)' : detail;
+  el.innerHTML = `
+    <button class="tool-header">
+      <span class="tool-icon">${icon}</span>
+      <span class="tool-name">${esc(name)}</span>
+      <span class="tool-msg">${esc(msg)}</span>
+      <span class="tool-arrow">▶</span>
+    </button>
+    <div class="tool-detail">${esc(displayDetail)}</div>
+  `;
+  el.querySelector('.tool-header').addEventListener('click', () => el.classList.toggle('open'));
+  return el;
+}
+
+// === Text formatting ===
+function formatText(text) {
+  const parts = text.split(/(```[\s\S]*?```)/g);
+  return parts.map((part, i) => {
+    if (i % 2 === 1) {
+      const code = part.replace(/^```[^\n]*\n?/, '').replace(/\n?```$/, '');
+      return `<pre style="background:var(--bg-card);padding:12px;border-radius:8px;overflow-x:auto;font-family:monospace;font-size:12px;margin:8px 0;border:1px solid var(--border);white-space:pre-wrap;word-break:break-word"><code>${esc(code)}</code></pre>`;
+    }
+    let html = esc(part);
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    html = html.replace(/`(.+?)`/g, '<code style="background:var(--bg-card);padding:2px 6px;border-radius:4px;font-family:monospace;font-size:12px">$1</code>');
+    return html.split('\n\n').map(p => p.trim() ? `<p>${p.replace(/\n/g, '<br>')}</p>` : '').join('');
+  }).join('');
+}
+
+function formatTime(ts) {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  } catch { return ''; }
+}
+
+function esc(s) {
+  if (!s) return '';
+  const el = document.createElement('div');
+  el.textContent = s;
+  return el.innerHTML;
+}
+
+// === Export ===
+function convToTxt(conv) {
+  const name = conv.name || '(无标题)';
+  const date = conv.created_at ? conv.created_at.slice(0, 10) : '';
+  const msgs = [...(conv.chat_messages || [])].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  let lines = [];
+  lines.push('═'.repeat(60));
+  lines.push(`  ${name}`);
+  lines.push(`  ${date}  |  ${msgs.length} 条消息`);
+  lines.push('═'.repeat(60));
+  lines.push('');
+  msgs.forEach(msg => {
+    const contents = (msg.content || []).filter(c => c.type !== 'token_budget');
+    const files = msg.files || [];
+    if (!contents.length && !files.length) return;
+    lines.push(`[${getSenderName(msg.sender)}]  ${formatTime(msg.created_at)}`);
+    lines.push('─'.repeat(40));
+    files.forEach(f => lines.push(`📎 ${f.file_name || '附件'}`));
+    contents.forEach(block => {
+      if (block.type === 'text' && block.text?.trim()) {
+        lines.push(block.text.trim());
+      } else if (block.type === 'thinking' && block.thinking?.trim()) {
+        const s = block.summaries?.[block.summaries.length-1]?.summary || '';
+        lines.push(`  💭 [思考] ${s.slice(0, 80)}`);
+        lines.push('  ┌─────────────────────');
+        block.thinking.trim().split('\n').forEach(l => lines.push('  │ ' + l));
+        lines.push('  └─────────────────────');
+      } else if (block.type === 'tool_use') {
+        lines.push(`  ⚙ [工具] ${block.name || ''} — ${block.message || ''}`);
+        if (block.input) {
+          const s = typeof block.input === 'object' ? JSON.stringify(block.input, null, 2) : String(block.input);
+          lines.push(`  输入: ${s.slice(0, 500)}`);
+        }
+      } else if (block.type === 'tool_result') {
+        lines.push(`  📋 [结果] ${block.name || ''} — ${block.message || ''}`);
+        let d = '';
+        if (block.content) d = Array.isArray(block.content) ? block.content.map(c => c.text || '').join('\n') : String(block.content);
+        if (d.trim()) {
+          const t = d.length > 1000 ? d.slice(0, 1000) + '\n… (已截断)' : d;
+          t.split('\n').forEach(l => lines.push('  ' + l));
+        }
+      } else if (block.type === 'flag') {
+        lines.push(`  ⚠ [${block.flag || 'flag'}]`);
+      }
+    });
+    lines.push('');
+  });
+  return lines.join('\n');
+}
+
+function downloadTxt(text, filename) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function showToast(msg) {
+  const toast = document.getElementById('export-toast');
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2500);
+}
+
+document.getElementById('btn-export-current').addEventListener('click', () => {
+  if (currentConvIndex < 0) return;
+  const conv = allConversations[currentConvIndex];
+  downloadTxt(convToTxt(conv), `${(conv.name || '对话').replace(/[\\/:*?"<>|]/g, '_')}.txt`);
+  showToast('已导出当前对话');
+});
+
+document.getElementById('btn-export-all').addEventListener('click', () => {
+  downloadTxt(validConversations.map(c => convToTxt(c)).join('\n\n\n'), 'all_conversations.txt');
+  showToast(`已导出 ${validConversations.length} 个对话`);
+});
+</script>
+</body>
+</html>
