@@ -398,7 +398,6 @@ class HeartState:
         "last_claude_active": None,   # ISO UTC string – last time Claude usage increased
         "last_proactive_sent": None,  # ISO UTC string – last time we sent a proactive msg
         "unanswered": 0,              # how many proactive msgs sent without her reply
-        "prev_screentime": 0,         # screentime minutes seen on last poll
     }
 
     def __init__(self):
@@ -442,8 +441,6 @@ class HeartState:
     def last_proactive_sent(self) -> datetime | None: return self._dt("last_proactive_sent")
     @property
     def unanswered(self) -> int:  return self._data.get("unanswered", 0)
-    @property
-    def prev_screentime(self) -> int: return self._data.get("prev_screentime", 0)
 
 
 heartstate = HeartState()
@@ -455,7 +452,7 @@ def _is_quiet(now: datetime) -> bool:
 
 
 async def _check_claude_active() -> bool:
-    """Return True if 冰冰's Claude screentime increased since the last poll."""
+    """Return True if the last screentime event for Claude today is 'open'."""
     if not MEMORY_API:
         return False
     try:
@@ -466,13 +463,11 @@ async def _check_claude_active() -> bool:
                 if resp.status != 200:
                     return False
                 data = await resp.json()
-                current = int(
-                    data.get("minutes") or data.get("duration") or
-                    data.get("total") or 0
-                )
-                prev = heartstate.prev_screentime
-                heartstate.set("prev_screentime", current)
-                return current > prev
+                events = data.get("data", [])
+                if not events:
+                    return False
+                # events are ordered ASC by timestamp; last entry is current state
+                return events[-1].get("state") == "open"
     except Exception as e:
         print(f"[Proactive] screentime error: {e}")
         return False
