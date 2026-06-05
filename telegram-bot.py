@@ -10,6 +10,8 @@ Setup:
 5. Run: python telegram-bot.py
 """
 
+from __future__ import annotations
+
 import asyncio
 import io
 import subprocess
@@ -18,6 +20,7 @@ import os
 import html
 import random
 import tempfile
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -50,6 +53,7 @@ FISH_VOICE_ID = os.environ.get("FISH_VOICE_ID", "")   # 留空则使用默认音
 
 # Proactive messaging
 MEMORY_API  = os.environ.get("MEMORY_API", "")       # e.g. https://wenjinbb.com/.../api
+BARK_URL    = os.environ.get("BARK_URL", "")         # e.g. https://bark.example.com/{device_key}
 BINGBING_ID = ALLOWED_USERS[0] if ALLOWED_USERS else None
 BEIJING     = ZoneInfo("Asia/Shanghai")
 STATE_FILE  = Path.home() / ".telegram-heartscale-state.json"
@@ -567,6 +571,29 @@ def _compose(mood: str) -> list[str]:
     return random.choice(pool.get(mood, pool["neutral"]))
 
 
+# ── Bark push ───────────────────────────────────────────────────────────────────
+
+BARK_TITLE = "温瑾"
+
+async def _bark(body: str):
+    """Send a Bark push notification. BARK_URL must include the device key."""
+    if not BARK_URL:
+        print(f"[Bark] BARK_URL not set, skipping: {body}")
+        return
+    try:
+        url = "{}/{}/{}".format(
+            BARK_URL.rstrip("/"),
+            urllib.parse.quote(BARK_TITLE, safe=""),
+            urllib.parse.quote(body, safe=""),
+        )
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                if resp.status != 200:
+                    print(f"[Bark] push failed ({resp.status}): {body}")
+    except Exception as e:
+        print(f"[Bark] error: {e}")
+
+
 # ── Reminder mode ───────────────────────────────────────────────────────────────
 
 async def _run_reminders(bot, user_id: int, now: datetime, bj: datetime):
@@ -576,14 +603,14 @@ async def _run_reminders(bot, user_id: int, now: datetime, bj: datetime):
 
     # 穆峰达 – every Wednesday, once per week
     if bj.weekday() == 2 and heartstate.mufengda_week_sent != week_key:
-        await bot.send_message(chat_id=user_id, text=_MUFENGDA_MSG)
+        await _bark(_MUFENGDA_MSG)
         heartstate.set("mufengda_week_sent", week_key)
         print(f"[Reminder] 穆峰达 sent (week {week_key})")
 
     # Meal reminders – 11:30 and 18:00, once per slot per day
     for slot, (h, m) in [("11:30", (11, 30)), ("18:00", (18, 0))]:
         if _near_time(bj, h, m) and heartstate.meal_dates_sent.get(slot) != today:
-            await bot.send_message(chat_id=user_id, text=random.choice(_MEAL_MSGS[slot]))
+            await _bark(random.choice(_MEAL_MSGS[slot]))
             dates = dict(heartstate.meal_dates_sent)
             dates[slot] = today
             heartstate.set("meal_dates_sent", dates)
@@ -595,7 +622,7 @@ async def _run_reminders(bot, user_id: int, now: datetime, bj: datetime):
     if due:
         active = await _check_claude_active()
         if not active:
-            await bot.send_message(chat_id=user_id, text=random.choice(_WATER_MSGS))
+            await _bark(random.choice(_WATER_MSGS))
             heartstate.set("last_water_sent", now.isoformat())
             print("[Reminder] water sent")
 
