@@ -1,0 +1,7 @@
+{
+  "conversation_url":     "https://claude.ai/chat/YOUR_CONVERSATION_ID",
+  "memory_api":           "https://wenjinbb.com/1b1a007db3764a2655cc66f3a0dee9f0/api",
+  "bark_url":             "https://api.day.app/YOUR_DEVICE_KEY",
+  "quiet_hours":          { "start": 1, "end": 9 },
+  "silence_thresholds_h": [3, 2, 1]
+}

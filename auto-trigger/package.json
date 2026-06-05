@@ -1,0 +1,12 @@
+{
+  "name": "auto-trigger",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "login":   "node login.js",
+    "trigger": "node trigger.js"
+  },
+  "dependencies": {
+    "playwright": "^1.44.0"
+  }
+}

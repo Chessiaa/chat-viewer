@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Install:
+    cp com.autotrigger.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.autotrigger.plist
+
+  Unload:
+    launchctl unload ~/Library/LaunchAgents/com.autotrigger.plist
+
+  Run manually now:
+    launchctl start com.autotrigger
+
+  Check logs:
+    tail -f ~/auto-trigger/trigger.log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.autotrigger</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/Users/YOUR_USERNAME/auto-trigger/trigger.js</string>
+  </array>
+
+  <!-- Every 30 minutes -->
+  <key>StartInterval</key>
+  <integer>1800</integer>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USERNAME/auto-trigger/trigger.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USERNAME/auto-trigger/trigger.log</string>
+
+  <!-- Make sure node and system env are available -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/YOUR_USERNAME</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+  </dict>
+</dict>
+</plist>
