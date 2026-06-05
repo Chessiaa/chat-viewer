@@ -387,17 +387,37 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ─────────────────────────── Proactive timer ───────────────────────────
+# ─────────────────────────── Proactive / Reminder timer ───────────────────────────
+
+# Switch between "reminder" (life reminders) and "emotional" (proactive messages).
+# Change MODE in .env as BOT_MODE=emotional to switch back without touching code.
+MODE = os.environ.get("BOT_MODE", "reminder")
+
+# ── Reminder message pools ──────────────────────────────────────────────────────
+_WATER_MSGS  = ["喝水", "宝贝喝水了吗", "去接杯水", "记得喝水哦", "水喝了吗~"]
+_MEAL_MSGS   = {
+    "11:30": ["去吃饭了", "午饭时间到了", "该吃午饭啦", "去吃饭~"],
+    "18:00": ["吃晚饭了", "晚饭时间到了", "该吃晚饭啦", "去吃饭~"],
+}
+_MUFENGDA_MSG = "穆峰达用了吗"
+
+_WATER_INTERVAL_S = 2 * 3600  # 2 hours
+
 
 class HeartState:
-    """Persisted state for the proactive message loop."""
+    """Persisted state shared by both reminder and emotional modes."""
 
     _defaults = {
-        "mood": 55,
-        "last_user_reply": None,      # ISO UTC string – when 冰冰 last replied
-        "last_claude_active": None,   # ISO UTC string – last time Claude usage increased
-        "last_proactive_sent": None,  # ISO UTC string – last time we sent a proactive msg
-        "unanswered": 0,              # how many proactive msgs sent without her reply
+        # ── reminder mode ──────────────────────────────
+        "last_water_sent":    None,   # ISO UTC – last water reminder
+        "meal_dates_sent":    {},     # {"11:30": "YYYY-MM-DD", "18:00": "YYYY-MM-DD"}
+        "mufengda_week_sent": None,   # "YYYY-WNN" – last week 穆峰达 was sent
+        # ── emotional mode (reserved) ──────────────────
+        "mood":               55,
+        "last_user_reply":    None,   # ISO UTC – when 冰冰 last replied
+        "last_claude_active": None,   # ISO UTC – last detected Claude activity
+        "last_proactive_sent":None,   # ISO UTC – last proactive message sent
+        "unanswered":         0,      # proactive msgs sent without reply
     }
 
     def __init__(self):
@@ -434,21 +454,36 @@ class HeartState:
         self.save()
 
     @property
-    def last_user_reply(self)   -> datetime | None: return self._dt("last_user_reply")
+    def last_water_sent(self)    -> datetime | None: return self._dt("last_water_sent")
+    @property
+    def meal_dates_sent(self)    -> dict:            return self._data.get("meal_dates_sent", {})
+    @property
+    def mufengda_week_sent(self) -> str | None:      return self._data.get("mufengda_week_sent")
+    # emotional (reserved)
+    @property
+    def last_user_reply(self)    -> datetime | None: return self._dt("last_user_reply")
     @property
     def last_claude_active(self) -> datetime | None: return self._dt("last_claude_active")
     @property
-    def last_proactive_sent(self) -> datetime | None: return self._dt("last_proactive_sent")
+    def last_proactive_sent(self)-> datetime | None: return self._dt("last_proactive_sent")
     @property
-    def unanswered(self) -> int:  return self._data.get("unanswered", 0)
+    def unanswered(self)         -> int:             return self._data.get("unanswered", 0)
 
 
 heartstate = HeartState()
 
 
+# ── Shared helpers ──────────────────────────────────────────────────────────────
+
 def _is_quiet(now: datetime) -> bool:
-    """1 am–9 am Beijing time → don't send."""
+    """1 am–9 am Beijing time → don't send anything."""
     return 1 <= now.astimezone(BEIJING).hour < 9
+
+
+def _near_time(bj: datetime, h: int, m: int, window: int = 2) -> bool:
+    """True if Beijing clock is within ±window minutes of (h, m)."""
+    delta = abs((bj.hour * 60 + bj.minute) - (h * 60 + m))
+    return delta <= window
 
 
 async def _check_claude_active() -> bool:
@@ -466,12 +501,13 @@ async def _check_claude_active() -> bool:
                 events = data.get("data", [])
                 if not events:
                     return False
-                # events are ordered ASC by timestamp; last entry is current state
                 return events[-1].get("state") == "open"
     except Exception as e:
-        print(f"[Proactive] screentime error: {e}")
+        print(f"[Timer] screentime error: {e}")
         return False
 
+
+# ── Mood helpers (reserved for emotional mode) ──────────────────────────────────
 
 async def _get_mood() -> str:
     """Fetch recent diary entries → 'positive' | 'negative' | 'neutral'."""
@@ -495,7 +531,7 @@ async def _get_mood() -> str:
                 )
                 return _classify(blob)
     except Exception as e:
-        print(f"[Proactive] diary mood error: {e}")
+        print(f"[Timer] diary mood error: {e}")
         return "neutral"
 
 
@@ -504,15 +540,13 @@ def _classify(text: str) -> str:
     neg = ["难过", "伤心", "不开心", "烦", "累", "沮丧", "焦虑", "哭", "😢", "😭", "生气"]
     p = sum(1 for w in pos if w in text)
     n = sum(1 for w in neg if w in text)
-    if p > n:
-        return "positive"
-    if n > p:
-        return "negative"
+    if p > n: return "positive"
+    if n > p: return "negative"
     return "neutral"
 
 
 def _compose(mood: str) -> list[str]:
-    """Return 2–3 short messages matching the mood."""
+    """Return 2–3 short emotional messages (reserved for emotional mode)."""
     pool = {
         "positive": [
             ["你在干嘛呀~", "想你了突然", "过来陪我玩嘛 🥺"],
@@ -533,71 +567,104 @@ def _compose(mood: str) -> list[str]:
     return random.choice(pool.get(mood, pool["neutral"]))
 
 
+# ── Reminder mode ───────────────────────────────────────────────────────────────
+
+async def _run_reminders(bot, user_id: int, now: datetime, bj: datetime):
+    today     = bj.strftime("%Y-%m-%d")
+    iso_cal   = bj.isocalendar()
+    week_key  = f"{iso_cal[0]}-W{iso_cal[1]:02d}"
+
+    # 穆峰达 – every Wednesday, once per week
+    if bj.weekday() == 2 and heartstate.mufengda_week_sent != week_key:
+        await bot.send_message(chat_id=user_id, text=_MUFENGDA_MSG)
+        heartstate.set("mufengda_week_sent", week_key)
+        print(f"[Reminder] 穆峰达 sent (week {week_key})")
+
+    # Meal reminders – 11:30 and 18:00, once per slot per day
+    for slot, (h, m) in [("11:30", (11, 30)), ("18:00", (18, 0))]:
+        if _near_time(bj, h, m) and heartstate.meal_dates_sent.get(slot) != today:
+            await bot.send_message(chat_id=user_id, text=random.choice(_MEAL_MSGS[slot]))
+            dates = dict(heartstate.meal_dates_sent)
+            dates[slot] = today
+            heartstate.set("meal_dates_sent", dates)
+            print(f"[Reminder] meal {slot} sent")
+
+    # Water reminder – every 2h, skip when Claude is active
+    last_water = heartstate.last_water_sent
+    due = last_water is None or (now - last_water).total_seconds() >= _WATER_INTERVAL_S
+    if due:
+        active = await _check_claude_active()
+        if not active:
+            await bot.send_message(chat_id=user_id, text=random.choice(_WATER_MSGS))
+            heartstate.set("last_water_sent", now.isoformat())
+            print("[Reminder] water sent")
+
+
+# ── Emotional mode (reserved) ────────────────────────────────────────────────────
+
+async def _run_emotional(bot, user_id: int, now: datetime):
+    active = await _check_claude_active()
+    if active:
+        heartstate.set("last_claude_active", now.isoformat())
+        return
+
+    anchors = [dt for dt in [heartstate.last_claude_active, heartstate.last_user_reply] if dt]
+    if not anchors:
+        heartstate.set("last_claude_active", now.isoformat())
+        return
+
+    silence_h = (now - max(anchors)).total_seconds() / 3600
+    unanswered = heartstate.unanswered
+    threshold  = 3.0 if unanswered == 0 else (2.0 if unanswered == 1 else 1.0)
+
+    last_sent = heartstate.last_proactive_sent
+    if last_sent and (now - last_sent).total_seconds() / 3600 < threshold:
+        return
+    if silence_h < threshold:
+        return
+
+    mood = await _get_mood()
+    msgs = _compose(mood)
+    await asyncio.sleep(random.randint(10, 90))
+    for i, msg in enumerate(msgs):
+        await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+        await asyncio.sleep(len(msg) * 0.12 + random.uniform(1.0, 2.5))
+        await bot.send_message(chat_id=user_id, text=msg)
+        if i < len(msgs) - 1:
+            await asyncio.sleep(random.uniform(2, 5))
+
+    heartstate.set("last_proactive_sent", now.isoformat())
+    heartstate.set("unanswered", unanswered + 1)
+    print(f"[Emotional] sent {len(msgs)} msgs · mood={mood} · unanswered={unanswered + 1}")
+
+
+# ── Main loop ────────────────────────────────────────────────────────────────────
+
 async def proactive_loop(bot, user_id: int):
-    """Background coroutine: polls every 5 min, sends messages when appropriate."""
-    await asyncio.sleep(30)  # let bot fully start first
+    """Background coroutine. Dispatches to reminder or emotional mode per MODE."""
+    # Seed water timer on first run so the first reminder fires after 2h, not immediately.
+    if heartstate.last_water_sent is None:
+        heartstate.set("last_water_sent", datetime.now(timezone.utc).isoformat())
+
+    await asyncio.sleep(30)  # let bot fully initialise
 
     while True:
         try:
             now = datetime.now(timezone.utc)
+            bj  = now.astimezone(BEIJING)
 
-            if _is_quiet(now):
-                await asyncio.sleep(600)
-                continue
-
-            active = await _check_claude_active()
-            if active:
-                heartstate.set("last_claude_active", now.isoformat())
-                await asyncio.sleep(300)
-                continue
-
-            # Silence clock starts from the later of: last Claude activity OR last reply from her
-            anchors = [dt for dt in [heartstate.last_claude_active, heartstate.last_user_reply] if dt]
-            if not anchors:
-                # No baseline yet – start counting from now
-                heartstate.set("last_claude_active", now.isoformat())
-                await asyncio.sleep(300)
-                continue
-
-            silence_start = max(anchors)
-            silence_h = (now - silence_start).total_seconds() / 3600
-
-            unanswered = heartstate.unanswered
-            threshold = 3.0 if unanswered == 0 else (2.0 if unanswered == 1 else 1.0)
-
-            # Also respect threshold gap from last send
-            last_sent = heartstate.last_proactive_sent
-            if last_sent and (now - last_sent).total_seconds() / 3600 < threshold:
-                await asyncio.sleep(300)
-                continue
-
-            if silence_h < threshold:
-                await asyncio.sleep(300)
-                continue
-
-            # Time to send
-            mood = await _get_mood()
-            msgs = _compose(mood)
-
-            await asyncio.sleep(random.randint(10, 90))  # natural hesitation
-
-            for i, msg in enumerate(msgs):
-                await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
-                await asyncio.sleep(len(msg) * 0.12 + random.uniform(1.0, 2.5))
-                await bot.send_message(chat_id=user_id, text=msg)
-                if i < len(msgs) - 1:
-                    await asyncio.sleep(random.uniform(2, 5))
-
-            heartstate.set("last_proactive_sent", now.isoformat())
-            heartstate.set("unanswered", unanswered + 1)
-            print(f"[Proactive] sent {len(msgs)} msgs · mood={mood} · unanswered={unanswered + 1}")
+            if not _is_quiet(now):
+                if MODE == "reminder":
+                    await _run_reminders(bot, user_id, now, bj)
+                else:
+                    await _run_emotional(bot, user_id, now)
 
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            print(f"[Proactive] loop error: {e}")
+            print(f"[Timer] loop error: {e}")
 
-        await asyncio.sleep(300)  # poll every 5 min
+        await asyncio.sleep(60)  # 1-min resolution needed for meal time windows
 
 
 def main():
