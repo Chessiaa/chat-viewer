@@ -63,12 +63,8 @@ BINGBING_ID = ALLOWED_USERS[0] if ALLOWED_USERS else None
 BEIJING     = ZoneInfo("Asia/Shanghai")
 STATE_FILE  = Path.home() / ".telegram-heartscale-state.json"
 
-# Optional: Voice transcription (requires mlx-whisper on Apple Silicon)
-try:
-    import mlx_whisper
-    VOICE_ENABLED = True
-except ImportError:
-    VOICE_ENABLED = True   # ElevenLabs TTS 无需本地模型，保持启用
+# TTS 走 ElevenLabs，不依赖本地模型
+VOICE_ENABLED = True
 
 # TTS on/off toggle per user (default: on)
 _tts_state: dict[int, bool] = {}
@@ -295,7 +291,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response, parse_mode="HTML")
 
     # Fish Audio TTS
-    if tts_on(user_id) and FISH_API_KEY:
+    if tts_on(user_id) and ELEVENLABS_API_KEY:
         await update.message.chat.send_action(ChatAction.RECORD_VOICE)
         audio = await generate_tts(raw_response)
         if audio:
@@ -369,7 +365,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response, parse_mode="HTML")
 
         # Fish Audio TTS
-        if tts_on(user_id) and FISH_API_KEY:
+        if tts_on(user_id) and ELEVENLABS_API_KEY:
             await update.message.chat.send_action(ChatAction.RECORD_VOICE)
             audio = await generate_tts(raw_response)
             if audio:
@@ -409,7 +405,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     sessions = load_sessions()
     has_session = str(user_id) in sessions
-    fish_status = "✅ 已配置" if FISH_API_KEY else "❌ 未配置"
+    fish_status = "✅ 已配置" if ELEVENLABS_API_KEY else "❌ 未配置"
     voice_id_disp = FISH_VOICE_ID if FISH_VOICE_ID else "（待填写）"
     await update.message.reply_text(
         f"User ID: {user_id}\n"
