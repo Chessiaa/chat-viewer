@@ -47,9 +47,14 @@ WORKSPACE = os.environ.get("CLAUDE_WORKSPACE", str(Path.home()))
 CLAUDE_PATH = os.environ.get("CLAUDE_PATH", "claude")
 SESSION_FILE = Path.home() / ".telegram-claude-sessions.json"
 
-# Fish Audio TTS
-FISH_API_KEY  = os.environ.get("FISH_API_KEY", "")
-FISH_VOICE_ID = os.environ.get("FISH_VOICE_ID", "")   # 留空则使用默认音色
+# ElevenLabs TTS
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = "RjzZnblDWwj8izV13S5w"
+ELEVENLABS_MODEL    = "eleven_flash_v2_5"
+
+# Fish Audio TTS (备用，暂时注释)
+# FISH_API_KEY  = os.environ.get("FISH_API_KEY", "")
+# FISH_VOICE_ID = os.environ.get("FISH_VOICE_ID", "")
 
 # Proactive messaging
 MEMORY_API  = os.environ.get("MEMORY_API", "")       # e.g. https://wenjinbb.com/.../api
@@ -63,7 +68,7 @@ try:
     import mlx_whisper
     VOICE_ENABLED = True
 except ImportError:
-    VOICE_ENABLED = False
+    VOICE_ENABLED = True   # ElevenLabs TTS 无需本地模型，保持启用
 
 # TTS on/off toggle per user (default: on)
 _tts_state: dict[int, bool] = {}
@@ -83,25 +88,50 @@ def save_sessions(sessions: dict):
 
 
 async def generate_tts(text: str) -> bytes | None:
-    """Generate MP3 audio via Fish Audio SDK. Returns bytes or None on failure."""
-    if not FISH_API_KEY or not text.strip():
+    """Generate MP3 audio via ElevenLabs API. Returns bytes or None on failure."""
+    if not ELEVENLABS_API_KEY or not text.strip():
         return None
     try:
-        from fish_audio_sdk import Session as FishSession, TTSRequest
-
-        def _sync() -> bytes:
-            fs = FishSession(api_key=FISH_API_KEY)
-            req = TTSRequest(
-                text=text[:300],   # 避免生成过长音频
-                format="mp3",
-                reference_id=FISH_VOICE_ID if FISH_VOICE_ID else None,
-            )
-            return b"".join(fs.tts(req))
-
-        return await asyncio.get_event_loop().run_in_executor(None, _sync)
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+        headers = {
+            "xi-api-key":   ELEVENLABS_API_KEY,
+            "Content-Type": "application/json",
+            "Accept":       "audio/mpeg",
+        }
+        payload = {
+            "text":     text[:500],
+            "model_id": ELEVENLABS_MODEL,
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload,
+                                    timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                if resp.status != 200:
+                    print(f"[TTS] ElevenLabs error {resp.status}: {await resp.text()}")
+                    return None
+                return await resp.read()
     except Exception as e:
         print(f"[TTS] 生成失败: {e}")
         return None
+
+# ── Fish Audio TTS（备用，切回时取消注释并替换 generate_tts）──
+# async def generate_tts(text: str) -> bytes | None:
+#     """Generate MP3 audio via Fish Audio SDK."""
+#     if not FISH_API_KEY or not text.strip():
+#         return None
+#     try:
+#         from fish_audio_sdk import Session as FishSession, TTSRequest
+#         def _sync() -> bytes:
+#             fs = FishSession(api_key=FISH_API_KEY)
+#             req = TTSRequest(
+#                 text=text[:300],
+#                 format="mp3",
+#                 reference_id=FISH_VOICE_ID if FISH_VOICE_ID else None,
+#             )
+#             return b"".join(fs.tts(req))
+#         return await asyncio.get_event_loop().run_in_executor(None, _sync)
+#     except Exception as e:
+#         print(f"[TTS] 生成失败: {e}")
+#         return None
 
 
 def transcribe_audio(audio_path: str) -> str:
