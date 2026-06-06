@@ -50,7 +50,7 @@ SESSION_FILE = Path.home() / ".telegram-claude-sessions.json"
 # ElevenLabs TTS
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = "RjzZnblDWwj8izV13S5w"
-ELEVENLABS_MODEL    = "eleven_flash_v2_5"
+ELEVENLABS_MODEL    = "eleven_v3"
 
 # Fish Audio TTS (备用，暂时注释)
 # FISH_API_KEY  = os.environ.get("FISH_API_KEY", "")
