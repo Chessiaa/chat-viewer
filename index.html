@@ -143,7 +143,15 @@ html, body {
 }
 
 /* Message */
-.message { margin-bottom: 24px; }
+.message {
+  margin-bottom: 24px; border-radius: 10px;
+  transition: background-color 0.2s, box-shadow 0.2s;
+  scroll-margin-top: 20px;
+}
+.message.message-target {
+  background: rgba(139,115,85,0.12);
+  box-shadow: 0 0 0 8px rgba(139,115,85,0.12);
+}
 .msg-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .msg-sender { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; }
 .msg-sender.human { color: var(--human); }
@@ -290,6 +298,7 @@ mark { background: rgba(139,115,85,0.2); color: var(--text); border-radius: 2px;
 let allConversations = [];
 let validConversations = [];
 let currentConvIndex = -1;
+let highlightTimer = null;
 
 function getHumanName()     { return document.getElementById('name-human').value.trim() || '冰冰'; }
 function getAssistantName() { return document.getElementById('name-assistant').value.trim() || '温瑾'; }
@@ -405,14 +414,14 @@ function searchAllMessages(keyword) {
   validConversations.forEach(conv => {
     const convIdx = allConversations.indexOf(conv);
     const msgs = [...(conv.chat_messages || [])].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-    msgs.forEach(msg => {
+    msgs.forEach((msg, msgIndex) => {
       const text = getMsgText(msg);
       if (!text.toLowerCase().includes(kw)) return;
       const pos = text.toLowerCase().indexOf(kw);
       const start = Math.max(0, pos - 60);
       const end = Math.min(text.length, pos + keyword.length + 80);
       const snippet = (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
-      results.push({ convIdx, conv, msg, snippet });
+      results.push({ convIdx, conv, msg, msgKey: getMessageKey(msg, msgIndex), snippet });
     });
   });
   return results;
@@ -435,7 +444,7 @@ function renderSearchResults(keyword) {
   header.textContent = `找到 ${results.length} 条匹配消息`;
   area.appendChild(header);
 
-  results.forEach(({ convIdx, conv, msg, snippet }) => {
+  results.forEach(({ convIdx, conv, msg, msgKey, snippet }) => {
     const item = document.createElement('div');
     item.className = 'search-result-item';
     const senderClass = msg.sender === 'human' ? 'human' : 'assistant';
@@ -449,10 +458,35 @@ function renderSearchResults(keyword) {
     `;
     item.addEventListener('click', () => {
       document.getElementById('search-input').value = '';
-      selectConv(convIdx);
+      selectConv(convIdx, { targetMsgKey: msgKey });
     });
     area.appendChild(item);
   });
+}
+
+function getMessageKey(msg, index) {
+  return msg.uuid || `${msg.created_at || 'no-time'}|${msg.sender || 'unknown'}|${index}`;
+}
+
+function scrollToMessage(msgKey, { highlight = true, behavior = 'smooth' } = {}) {
+  const area = document.getElementById('messages-area');
+  const target = [...area.querySelectorAll('.message')]
+    .find(el => el.dataset.messageKey === msgKey);
+  if (!target) return;
+
+  area.scrollTo({
+    top: Math.max(0, target.offsetTop - 18),
+    behavior,
+  });
+
+  if (!highlight) return;
+  if (highlightTimer) clearTimeout(highlightTimer);
+  area.querySelectorAll('.message-target').forEach(el => el.classList.remove('message-target'));
+  target.classList.add('message-target');
+  highlightTimer = setTimeout(() => {
+    target.classList.remove('message-target');
+    highlightTimer = null;
+  }, 2800);
 }
 
 // === Conversation list ===
@@ -497,13 +531,16 @@ document.getElementById('search-input').addEventListener('input', e => {
 });
 
 // === Select conversation ===
-function selectConv(index) {
+function selectConv(index, options = {}) {
   currentConvIndex = index;
   const conv = allConversations[index];
   document.getElementById('topbar-title').textContent = conv.name || '(无标题)';
   document.getElementById('btn-export-current').style.display = '';
   renderConvList(document.getElementById('search-input').value);
   renderMessages(conv);
+  if (options.targetMsgKey) {
+    requestAnimationFrame(() => scrollToMessage(options.targetMsgKey));
+  }
   sidebar.classList.remove('open');
   overlay.classList.remove('show');
 }
@@ -523,7 +560,7 @@ function renderMessages(conv) {
   area.appendChild(wrapper);
 
   let lastSender = null;
-  msgs.forEach(msg => {
+  msgs.forEach((msg, msgIndex) => {
     const contents = (msg.content || []).filter(c => c.type !== 'token_budget');
     const files = [...(msg.files || []), ...(msg.attachments || [])];
     const meaningful = contents.filter(c =>
@@ -541,6 +578,7 @@ function renderMessages(conv) {
 
     const msgEl = document.createElement('div');
     msgEl.className = 'message';
+    msgEl.dataset.messageKey = getMessageKey(msg, msgIndex);
 
     const header = document.createElement('div');
     header.className = 'msg-header';
