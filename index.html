@@ -26,6 +26,25 @@
   --flag-color: #c06050;
 }
 
+:root[data-theme="dark"] {
+  --bg: #111315;
+  --bg-panel: #181b1f;
+  --bg-card: #22262b;
+  --bg-hover: #2c3137;
+  --bg-thinking: #1d2126;
+  --border: #343a42;
+  --text: #ece7df;
+  --text-dim: #c9c1b4;
+  --text-muted: #8c9298;
+  --accent: #d0b27c;
+  --accent-dim: #aa9169;
+  --human: #e0a86d;
+  --assistant: #8cc3aa;
+  --tool: #8fcfa1;
+  --thinking-color: #c0a5d6;
+  --flag-color: #ef8b79;
+}
+
 html, body {
   height: 100%;
   font-family: system-ui, -apple-system, sans-serif;
@@ -91,6 +110,7 @@ html, body {
   font-family: inherit; white-space: nowrap; flex-shrink: 0; transition: all 0.15s;
 }
 .topbar-btn:hover { background: var(--bg-hover); color: var(--text); }
+.theme-toggle { min-width: 44px; }
 
 /* Timeline */
 .timeline-bar {
@@ -296,6 +316,7 @@ mark { background: rgba(139,115,85,0.2); color: var(--text); border-radius: 2px;
     <button class="topbar-btn" id="btn-export-current" style="display:none">导出当前</button>
     <button class="topbar-btn" id="btn-export-all">导出全部</button>
     <button class="topbar-btn" id="btn-reload">换文件</button>
+    <button class="topbar-btn theme-toggle" id="theme-toggle" aria-pressed="false">夜间</button>
   </div>
 
   <div class="timeline-bar" id="timeline-bar" hidden>
@@ -347,6 +368,32 @@ const timelineRange = document.getElementById('timeline-range');
 const timelineStart = document.getElementById('timeline-start');
 const timelineCurrent = document.getElementById('timeline-current');
 const timelineEnd = document.getElementById('timeline-end');
+const themeToggle = document.getElementById('theme-toggle');
+
+function getStoredTheme() {
+  try { return localStorage.getItem('chatViewerTheme'); }
+  catch { return null; }
+}
+
+function setStoredTheme(theme) {
+  try { localStorage.setItem('chatViewerTheme', theme); }
+  catch {}
+}
+
+function applyTheme(theme) {
+  const isDark = theme === 'dark';
+  document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
+  themeToggle.textContent = isDark ? '亮色' : '夜间';
+  themeToggle.setAttribute('aria-pressed', String(isDark));
+  setStoredTheme(isDark ? 'dark' : 'light');
+}
+
+applyTheme(getStoredTheme() === 'dark' ? 'dark' : 'light');
+
+themeToggle.addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+});
 
 uploadZone.addEventListener('click', () => fileInput.click());
 uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
