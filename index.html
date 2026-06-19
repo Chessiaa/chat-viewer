@@ -92,6 +92,26 @@ html, body {
 }
 .topbar-btn:hover { background: var(--bg-hover); color: var(--text); }
 
+/* Timeline */
+.timeline-bar {
+  background: var(--bg-panel); border-bottom: 1px solid var(--border);
+  padding: 8px 16px 10px; flex-shrink: 0;
+}
+.timeline-bar[hidden] { display: none; }
+.timeline-meta {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+  gap: 10px; margin-bottom: 6px; font-size: 11px; color: var(--text-muted);
+  font-family: monospace;
+}
+.timeline-current {
+  color: var(--accent); font-weight: 600; min-width: 132px; text-align: center;
+}
+.timeline-end { text-align: right; }
+.timeline-range {
+  display: block; width: 100%; accent-color: var(--accent); cursor: pointer;
+}
+.timeline-range:disabled { cursor: default; opacity: 0.55; }
+
 /* Content */
 .content-area { display: flex; flex: 1; overflow: hidden; position: relative; }
 
@@ -278,6 +298,15 @@ mark { background: rgba(139,115,85,0.2); color: var(--text); border-radius: 2px;
     <button class="topbar-btn" id="btn-reload">换文件</button>
   </div>
 
+  <div class="timeline-bar" id="timeline-bar" hidden>
+    <div class="timeline-meta">
+      <span id="timeline-start"></span>
+      <span class="timeline-current" id="timeline-current"></span>
+      <span class="timeline-end" id="timeline-end"></span>
+    </div>
+    <input class="timeline-range" id="timeline-range" type="range" min="0" max="1000" step="1" value="0" aria-label="对话时间轴">
+  </div>
+
   <div class="content-area">
     <div class="sidebar-overlay" id="sidebar-overlay"></div>
     <div class="sidebar" id="sidebar">
@@ -299,6 +328,11 @@ let allConversations = [];
 let validConversations = [];
 let currentConvIndex = -1;
 let highlightTimer = null;
+let timelineItems = [];
+let timelineStartMs = 0;
+let timelineEndMs = 0;
+let timelineSeeking = false;
+let timelineRaf = null;
 
 function getHumanName()     { return document.getElementById('name-human').value.trim() || '冰冰'; }
 function getAssistantName() { return document.getElementById('name-assistant').value.trim() || '温瑾'; }
@@ -307,6 +341,12 @@ function getSenderName(sender) { return sender === 'human' ? getHumanName() : ge
 // === Upload ===
 const uploadZone = document.getElementById('upload-zone');
 const fileInput  = document.getElementById('file-input');
+const messagesArea = document.getElementById('messages-area');
+const timelineBar = document.getElementById('timeline-bar');
+const timelineRange = document.getElementById('timeline-range');
+const timelineStart = document.getElementById('timeline-start');
+const timelineCurrent = document.getElementById('timeline-current');
+const timelineEnd = document.getElementById('timeline-end');
 
 uploadZone.addEventListener('click', () => fileInput.click());
 uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
@@ -360,6 +400,7 @@ document.getElementById('btn-reload').addEventListener('click', () => {
   allConversations = []; validConversations = [];
   currentConvIndex = -1; fileInput.value = '';
   document.getElementById('search-input').value = '';
+  hideTimeline();
 });
 
 // === Sidebar toggle ===
@@ -429,6 +470,7 @@ function searchAllMessages(keyword) {
 
 function renderSearchResults(keyword) {
   const area = document.getElementById('messages-area');
+  hideTimeline();
   area.innerHTML = '';
   if (!keyword.trim()) {
     area.innerHTML = '<div class="empty-state">点击左上角 ☰ 选择对话</div>';
@@ -469,7 +511,7 @@ function getMessageKey(msg, index) {
 }
 
 function scrollToMessage(msgKey, { highlight = true, behavior = 'smooth' } = {}) {
-  const area = document.getElementById('messages-area');
+  const area = messagesArea;
   const target = [...area.querySelectorAll('.message')]
     .find(el => el.dataset.messageKey === msgKey);
   if (!target) return;
@@ -488,6 +530,107 @@ function scrollToMessage(msgKey, { highlight = true, behavior = 'smooth' } = {})
     highlightTimer = null;
   }, 2800);
 }
+
+function getMessageTime(msg) {
+  const time = new Date(msg.created_at).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function hideTimeline() {
+  timelineItems = [];
+  timelineBar.hidden = true;
+}
+
+function setupTimeline() {
+  if (!timelineItems.length) {
+    hideTimeline();
+    return;
+  }
+  timelineStartMs = timelineItems[0].timeMs;
+  timelineEndMs = timelineItems[timelineItems.length - 1].timeMs;
+  timelineBar.hidden = false;
+  timelineRange.disabled = timelineStartMs === timelineEndMs;
+  timelineStart.textContent = formatTime(timelineStartMs);
+  timelineEnd.textContent = formatTime(timelineEndMs);
+  setTimelineValue(timelineStartMs);
+  updateTimelineCurrent(timelineStartMs);
+}
+
+function timeFromTimelineValue() {
+  if (timelineStartMs === timelineEndMs) return timelineStartMs;
+  return timelineStartMs + (Number(timelineRange.value) / 1000) * (timelineEndMs - timelineStartMs);
+}
+
+function setTimelineValue(timeMs) {
+  if (timelineStartMs === timelineEndMs) {
+    timelineRange.value = 0;
+    return;
+  }
+  const ratio = (timeMs - timelineStartMs) / (timelineEndMs - timelineStartMs);
+  timelineRange.value = Math.max(0, Math.min(1000, Math.round(ratio * 1000)));
+}
+
+function updateTimelineCurrent(timeMs) {
+  timelineCurrent.textContent = formatTime(timeMs);
+}
+
+function findTimelineItem(targetMs) {
+  let closest = timelineItems[0];
+  let closestDiff = Math.abs(closest.timeMs - targetMs);
+  for (const item of timelineItems) {
+    const diff = Math.abs(item.timeMs - targetMs);
+    if (diff < closestDiff) {
+      closest = item;
+      closestDiff = diff;
+    }
+    if (item.timeMs >= targetMs && diff > closestDiff) break;
+  }
+  return closest;
+}
+
+function scrollToTimelineTime(targetMs, behavior = 'auto') {
+  const item = findTimelineItem(targetMs);
+  if (!item) return;
+  scrollToMessage(item.key, { highlight: false, behavior });
+  setTimelineValue(item.timeMs);
+  updateTimelineCurrent(item.timeMs);
+}
+
+function syncTimelineToScroll() {
+  if (!timelineItems.length || timelineSeeking) return;
+  const viewTop = messagesArea.scrollTop + 24;
+  let current = timelineItems[0];
+  for (const item of timelineItems) {
+    if (item.element.offsetTop <= viewTop) current = item;
+    else break;
+  }
+  setTimelineValue(current.timeMs);
+  updateTimelineCurrent(current.timeMs);
+}
+
+timelineRange.addEventListener('pointerdown', () => {
+  timelineSeeking = true;
+});
+timelineRange.addEventListener('input', () => {
+  if (!timelineItems.length) return;
+  timelineSeeking = true;
+  scrollToTimelineTime(timeFromTimelineValue());
+});
+timelineRange.addEventListener('change', () => {
+  timelineSeeking = false;
+  syncTimelineToScroll();
+});
+timelineRange.addEventListener('pointerup', () => {
+  timelineSeeking = false;
+  syncTimelineToScroll();
+});
+messagesArea.addEventListener('scroll', () => {
+  if (timelineRaf) return;
+  timelineRaf = requestAnimationFrame(() => {
+    timelineRaf = null;
+    syncTimelineToScroll();
+  });
+}, { passive: true });
 
 // === Conversation list ===
 function renderConvList(filter = '') {
@@ -547,10 +690,12 @@ function selectConv(index, options = {}) {
 
 // === Render messages ===
 function renderMessages(conv) {
-  const area = document.getElementById('messages-area');
+  const area = messagesArea;
   area.innerHTML = '';
+  timelineItems = [];
   const msgs = [...(conv.chat_messages || [])].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   if (!msgs.length) {
+    hideTimeline();
     area.innerHTML = '<div class="empty-state">此对话没有消息</div>';
     return;
   }
@@ -578,7 +723,8 @@ function renderMessages(conv) {
 
     const msgEl = document.createElement('div');
     msgEl.className = 'message';
-    msgEl.dataset.messageKey = getMessageKey(msg, msgIndex);
+    const msgKey = getMessageKey(msg, msgIndex);
+    msgEl.dataset.messageKey = msgKey;
 
     const header = document.createElement('div');
     header.className = 'msg-header';
@@ -621,10 +767,15 @@ function renderMessages(conv) {
     });
 
     wrapper.appendChild(msgEl);
+    const timeMs = getMessageTime(msg);
+    if (timeMs !== null) {
+      timelineItems.push({ key: msgKey, timeMs, element: msgEl });
+    }
     lastSender = msg.sender;
   });
 
   area.scrollTop = 0;
+  setupTimeline();
 }
 
 function renderThinking(block) {
